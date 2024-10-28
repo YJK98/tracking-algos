@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JPDA Tracker Playground</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+        }
+
+        .playground {
+            width: 100%;
+            height: 400px;
+            border: 1px solid #000;
+            position: relative;
+            overflow: hidden;
+            background-color: #f0f0f0;
+        }
+
+        .emoji {
+            position: absolute;
+            font-size: 24px;
+            z-index: 2;
+        }
+
+        .measurement {
+            position: absolute;
+            width: 6px;
+            height: 6px;
+            background-color: rgba(255, 0, 0, 0.5); /* Transparent red */
+            border-radius: 50%;
+        }
+
+        .uncertainty {
+            position: absolute;
+            border: 2px dashed rgba(0, 0, 0, 0.5);
+            border-radius: 50%;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="playground" class="playground"></div>
+    <button id="addEmoji">Add Emoji</button>
+    <button id="startAnimation">Start Animation</button>
+    
+    <script>
+        const playground = document.getElementById('playground');
+        const addEmojiButton = document.getElementById('addEmoji');
+        const startAnimationButton = document.getElementById('startAnimation');
+
+        let emojis = [];
+        let animationInterval;
+
+        class JPDA_Tracker {
+            constructor() {
+                this.measurements = [];
+                this.estimatedPositions = [];
+            }
+
+            addMeasurement(measurement) {
+                this.measurements.push(measurement);
+                if (this.measurements.length > 10) {
+                    this.measurements.shift(); // Keep only last 10 measurements
+                }
+            }
+
+            updateEstimates() {
+                this.estimatedPositions = this.measurements.map(m => ({ x: m.x, y: m.y }));
+            }
+
+            getEstimates() {
+                return this.estimatedPositions;
+            }
+        }
+
+        addEmojiButton.addEventListener('click', () => {
+            const emoji = Math.random() < 0.5 ? '🐱' : '🐭'; // Randomly select cat or mouse
+            const emojiDiv = document.createElement('div');
+            emojiDiv.className = 'emoji';
+            emojiDiv.innerText = emoji;
+            emojiDiv.style.left = Math.random() * (playground.clientWidth - 50) + 'px';
+            emojiDiv.style.top = Math.random() * (playground.clientHeight - 50) + 'px';
+            playground.appendChild(emojiDiv);
+
+            emojis.push({
+                element: emojiDiv,
+                tracker: new JPDA_Tracker(),
+                velocity: Math.random() * 2 + 1, // Random velocity
+                direction: Math.random() * 2 * Math.PI, // Random direction in radians
+            });
+        });
+
+        startAnimationButton.addEventListener('click', () => {
+            if (animationInterval) clearInterval(animationInterval);
+
+            animationInterval = setInterval(() => {
+                emojis.forEach(emoji => {
+                    const dx = emoji.velocity * Math.cos(emoji.direction);
+                    const dy = emoji.velocity * Math.sin(emoji.direction);
+
+                    // Update position
+                    let newX = emoji.element.offsetLeft + dx;
+                    let newY = emoji.element.offsetTop + dy;
+
+                    // Handle boundaries
+                    if (newX < 0 || newX > playground.clientWidth - 50) {
+                        emoji.direction = Math.PI - emoji.direction; // Reverse direction on X collision
+                    }
+                    if (newY < 0 || newY > playground.clientHeight - 50) {
+                        emoji.direction = -emoji.direction; // Reverse direction on Y collision
+                    }
+
+                    // Move emoji
+                    emoji.element.style.left = (emoji.element.offsetLeft + dx) + 'px';
+                    emoji.element.style.top = (emoji.element.offsetTop + dy) + 'px';
+
+                    // Measurement simulation (random noise around current position)
+                    const measurementX = emoji.element.offsetLeft + 25 + (Math.random() - 0.5) * 10; // Center point
+                    const measurementY = emoji.element.offsetTop + 25 + (Math.random() - 0.5) * 10;
+
+                    // Add measurement to the tracker
+                    emoji.tracker.addMeasurement({ x: measurementX, y: measurementY });
+
+                    // Update estimates using JPDA
+                    emoji.tracker.updateEstimates();
+                    const estimates = emoji.tracker.getEstimates();
+
+                    // Draw measurement points
+                    const measurementDiv = document.createElement('div');
+                    measurementDiv.className = 'measurement';
+                    measurementDiv.style.left = measurementX + 'px';
+                    measurementDiv.style.top = measurementY + 'px';
+                    playground.appendChild(measurementDiv);
+
+                    // Draw uncertainty circle based on estimates
+                    estimates.forEach((estimate, index) => {
+                        const uncertaintyDiv = document.createElement('div');
+                        uncertaintyDiv.className = 'uncertainty';
+                        const uncertaintyRadius = 20; // Static uncertainty radius for simplicity
+                        uncertaintyDiv.style.width = uncertaintyRadius * 2 + 'px';
+                        uncertaintyDiv.style.height = uncertaintyRadius * 2 + 'px';
+                        uncertaintyDiv.style.left = (estimate.x - uncertaintyRadius) + 'px';
+                        uncertaintyDiv.style.top = (estimate.y - uncertaintyRadius) + 'px';
+                        playground.appendChild(uncertaintyDiv);
+                    });
+                });
+            }, 100);
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Unscented Kalman Filter Tracker Playground</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+        }
+
+        .playground {
+            width: 100%;
+            height: 400px;
+            border: 1px solid #000;
+            position: relative;
+            overflow: hidden;
+            background-color: #f0f0f0;
+        }
+
+        .emoji {
+            position: absolute;
+            font-size: 24px;
+            z-index: 2;
+        }
+
+        .measurement {
+            position: absolute;
+            width: 6px;
+            height: 6px;
+            background-color: rgba(255, 0, 0, 0.5); /* Transparent red */
+            border-radius: 50%;
+        }
+
+        .uncertainty {
+            position: absolute;
+            border: 2px dashed rgba(0, 0, 0, 0.5);
+            border-radius: 50%;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="playground" class="playground"></div>
+    <button id="addEmoji">Add Emoji</button>
+    
+    <label for="model">Select Model:</label>
+    <select id="model">
+        <option value="constant">Constant Velocity</option>
+        <option value="accelerate">Constant Acceleration</option>
+    </select>
+    
+    <button id="startAnimation">Start Animation</button>
+    
+    <script>
+        const playground = document.getElementById('playground');
+        const addEmojiButton = document.getElementById('addEmoji');
+        const startAnimationButton = document.getElementById('startAnimation');
+        const modelSelect = document.getElementById('model');
+
+        let emojis = [];
+        let animationInterval;
+
+        // Unscented Kalman Filter Class
+        class UnscentedKalmanFilter {
+            constructor() {
+                this.state = { x: 0, y: 0, vx: 0, vy: 0 }; // State: [x, y, vx, vy]
+                this.P = [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]; // Initial covariance
+                this.Q = [[0.1, 0, 0, 0], [0, 0.1, 0, 0], [0, 0, 0.1, 0], [0, 0, 0, 0.1]]; // Process noise covariance
+                this.R = [[5, 0], [0, 5]]; // Measurement noise covariance
+                this.alpha = 1e-3; // Spread of sigma points
+                this.beta = 2; // Optimal for Gaussian distributions
+                this.kappa = 0; // Secondary scaling parameter
+            }
+
+            // Generate sigma points
+            generateSigmaPoints() {
+                const n = 4; // State dimension
+                const lambda = this.alpha * this.alpha * (n + this.kappa) - n;
+                const sigmaPoints = [];
+                const sqrtP = this.cholDecomposition(this.P);
+
+                // Mean
+                sigmaPoints.push(this.state);
+
+                // Create sigma points
+                for (let i = 0; i < n; i++) {
+                    const point1 = this.addVectors(this.state, this.multiplyVectorByScalar(sqrtP[i], Math.sqrt(n + lambda)));
+                    const point2 = this.addVectors(this.state, this.multiplyVectorByScalar(sqrtP[i], -Math.sqrt(n + lambda)));
+                    sigmaPoints.push(point1, point2);
+                }
+                return sigmaPoints;
+            }
+
+            // Predict step
+            predict() {
+                const sigmaPoints = this.generateSigmaPoints();
+                const predictedPoints = sigmaPoints.map(point => {
+                    return {
+                        x: point.x + point.vx,
+                        y: point.y + point.vy,
+                        vx: point.vx,
+                        vy: point.vy
+                    };
+                });
+
+                // Calculate mean and covariance
+                const mean = this.calculateMean(predictedPoints);
+                this.state = mean;
+                const cov = this.calculateCovariance(predictedPoints, mean);
+                this.P = this.addMatrices(cov, this.Q);
+            }
+
+            // Update step
+            update(measurement) {
+                const sigmaPoints = this.generateSigmaPoints();
+                const predictedMeasurements = sigmaPoints.map(point => ({ x: point.x, y: point.y }));
+
+                // Calculate measurement mean and covariance
+                const zMean = this.calculateMean(predictedMeasurements);
+                const zCov = this.calculateCovariance(predictedMeasurements, zMean);
+                const crossCov = this.calculateCrossCovariance(sigmaPoints, predictedMeasurements, this.state, zMean);
+
+                // Calculate Kalman gain
+                const S = this.addMatrices(zCov, this.R);
+                const K = this.multiplyMatrices(crossCov, this.inverse(S));
+
+                // Update state
+                const y = { x: measurement.x - zMean.x, y: measurement.y - zMean.y };
+                this.state.x += K[0][0] * y.x + K[0][1] * y.y;
+                this.state.y += K[1][0] * y.x + K[1][1] * y.y;
+
+                // Update covariance
+                this.P = this.subtractMatrices(this.P, this.multiplyMatrices(K, zCov));
+            }
+
+            // Cholesky decomposition
+            cholDecomposition(matrix) {
+                const n = matrix.length;
+                const L = Array.from({ length: n }, () => Array(n).fill(0));
+                for (let i = 0; i < n; i++) {
+                    for (let j = 0; j <= i; j++) {
+                        let sum = 0;
+                        for (let k = 0; k < j; k++) {
+                            sum += L[i][k] * L[j][k];
+                        }
+                        L[i][j] = (i === j) ? Math.sqrt(matrix[i][i] - sum) : (1.0 / L[j][j] * (matrix[i][j] - sum));
+                    }
+                }
+                return L;
+            }
+
+            // Mean calculation
+            calculateMean(points) {
+                const mean = { x: 0, y: 0 };
+                points.forEach(point => {
+                    mean.x += point.x;
+                    mean.y += point.y;
+                });
+                mean.x /= points.length;
+                mean.y /= points.length;
+                return mean;
+            }
+
+            // Covariance calculation
+            calculateCovariance(points, mean) {
+                const cov = Array(4).fill(0).map(() => Array(4).fill(0));
+                points.forEach(point => {
+                    const diff = { x: point.x - mean.x, y: point.y - mean.y };
+                    cov[0][0] += diff.x * diff.x;
+                    cov[0][1] += diff.x * diff.y;
+                    cov[1][0] += diff.y * diff.x;
+                    cov[1][1] += diff.y * diff.y;
+                });
+                cov.forEach(row => row.forEach((val, i) => (row[i] /= points.length)));
+                return cov;
+            }
+
+            // Cross covariance calculation
+            calculateCrossCovariance(sigmaPoints, predictedMeasurements, meanState, meanMeasurement) {
+                const crossCov = Array(4).fill(0).map(() => Array(2).fill(0));
+                sigmaPoints.forEach((point, i) => {
+                    const stateDiff = { x: point.x - meanState.x, y: point.y - meanState.y };
+                    const measurementDiff = { x: predictedMeasurements[i].x - meanMeasurement.x, y: predictedMeasurements[i].y - meanMeasurement.y };
+                    crossCov[0][0] += stateDiff.x * measurementDiff.x;
+                    crossCov[0][1] += stateDiff.x * measurementDiff.y;
+                    crossCov[1][0] += stateDiff.y * measurementDiff.x;
+                    crossCov[1][1] += stateDiff.y * measurementDiff.y;
+                });
+                crossCov.forEach(row => row.forEach((val, i) => (row[i] /= sigmaPoints.length)));
+                return crossCov;
+            }
+
+            // Matrix addition
+            addMatrices(A, B) {
+                return A.map((row, i) => row.map((val, j) => val + B[i][j]));
+            }
+
+            // Matrix subtraction
+            subtractMatrices(A, B) {
+                return A.map((row, i) => row.map((val, j) => val - B[i][j]));
+            }
+
+            // Matrix multiplication
+            multiplyMatrices(A, B) {
+                return A.map(row => B[0].map((_, j) => row.reduce((sum, val, k) => sum + val * B[k][j], 0)));
+            }
+
+            // Matrix inverse (2x2 for measurement update)
+            inverse(matrix) {
+                const det = matrix[0][0] * matrix[1][1] - matrix[0][1] * matrix[1][0];
+                return [[matrix[1][1] / det, -matrix[0][1] / det], [-matrix[1][0] / det, matrix[0][0] / det]];
+            }
+
+            // Add vectors
+            addVectors(a, b) {
+                return { x: a.x + b.x, y: a.y + b.y, vx: a.vx + b.vx, vy: a.vy + b.vy };
+            }
+
+            // Scale vector by scalar
+            multiplyVectorByScalar(vec, scalar) {
+                return { x: vec.x * scalar, y: vec.y * scalar, vx: vec.vx * scalar, vy: vec.vy * scalar };
+            }
+        }
+
+        addEmojiButton.addEventListener('click', () => {
+            const emoji = Math.random() < 0.5 ? '🐱' : '🐭'; // Randomly select cat or mouse
+            const emojiDiv = document.createElement('div');
+            emojiDiv.className = 'emoji';
+            emojiDiv.innerText = emoji;
+            emojiDiv.style.left = Math.random() * (playground.clientWidth - 50) + 'px';
+            emojiDiv.style.top = Math.random() * (playground.clientHeight - 50) + 'px';
+            playground.appendChild(emojiDiv);
+            
+            emojis.push({
+                element: emojiDiv,
+                velocity: Math.random() * 2 + 1, // Random velocity
+                direction: Math.random() * 2 * Math.PI, // Random direction in radians
+                acceleration: modelSelect.value === 'accelerate' ? (Math.random() - 0.5) : 0,
+                tracker: new UnscentedKalmanFilter(),
+                uncertaintyCircle: null,
+                measurements: [],
+            });
+        });
+
+        startAnimationButton.addEventListener('click', () => {
+            if (animationInterval) clearInterval(animationInterval);
+            
+            animationInterval = setInterval(() => {
+                emojis.forEach(emoji => {
+                    const dx = emoji.velocity * Math.cos(emoji.direction);
+                    const dy = emoji.velocity * Math.sin(emoji.direction);
+
+                    // Update position
+                    const rect = emoji.element.getBoundingClientRect();
+                    let newX = rect.left + dx;
+                    let newY = rect.top + dy;
+
+                    // Handle boundaries
+                    if (newX < 0 || newX > playground.clientWidth - 50) {
+                        emoji.direction = Math.PI - emoji.direction; // Reverse direction on X collision
+                    }
+                    if (newY < 0 || newY > playground.clientHeight - 50) {
+                        emoji.direction = -emoji.direction; // Reverse direction on Y collision
+                    }
+
+                    // Move emoji
+                    emoji.element.style.left = (emoji.element.offsetLeft + dx) + 'px';
+                    emoji.element.style.top = (emoji.element.offsetTop + dy) + 'px';
+
+                    // Measurement simulation (random noise around current position)
+                    const measurementX = emoji.element.offsetLeft + 25 + (Math.random() - 0.5) * 10; // Center point
+                    const measurementY = emoji.element.offsetTop + 25 + (Math.random() - 0.5) * 10;
+
+                    // Add measurement and update UKF
+                    emoji.measurements.push({ x: measurementX, y: measurementY });
+                    if (emoji.measurements.length > 10) {
+                        emoji.measurements.shift(); // Keep only last 10 measurements
+                    }
+                    emoji.tracker.predict();
+                    emoji.tracker.update({ x: measurementX, y: measurementY });
+
+                    // Clear previous measurements
+                    const measurementPoints = document.querySelectorAll('.measurement');
+                    measurementPoints.forEach(point => playground.removeChild(point));
+
+                    // Draw transparent measurement points
+                    emoji.measurements.forEach((m) => {
+                        const measurementDiv = document.createElement('div');
+                        measurementDiv.className = 'measurement';
+                        measurementDiv.style.left = m.x + 'px';
+                        measurementDiv.style.top = m.y + 'px';
+                        playground.appendChild(measurementDiv);
+                    });
+
+                    // Draw uncertainty circle
+                    if (emoji.uncertaintyCircle) {
+                        playground.removeChild(emoji.uncertaintyCircle);
+                    }
+                    emoji.uncertaintyCircle = document.createElement('div');
+                    emoji.uncertaintyCircle.className = 'uncertainty';
+                    const uncertaintyRadius = Math.sqrt(this.P[0][0]) * 2; // Scale based on uncertainty
+                    emoji.uncertaintyCircle.style.width = uncertaintyRadius * 2 + 'px';
+                    emoji.uncertaintyCircle.style.height = uncertaintyRadius * 2 + 'px';
+                    emoji.uncertaintyCircle.style.left = (emoji.tracker.state.x - uncertaintyRadius) + 'px';
+                    emoji.uncertaintyCircle.style.top = (emoji.tracker.state.y - uncertaintyRadius) + 'px';
+                    playground.appendChild(emoji.uncertaintyCircle);
+                });
+            }, 100);
+        });
+    </script>
+</body>
+</html>

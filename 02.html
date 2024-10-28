@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kalman Filter Emoji Playground</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+        }
+
+        .playground {
+            width: 100%;
+            height: 400px;
+            border: 1px solid #000;
+            position: relative;
+            overflow: hidden;
+            background-color: #f0f0f0;
+        }
+
+        .emoji {
+            position: absolute;
+            font-size: 24px;
+            z-index: 2;
+        }
+
+        .measurement {
+            position: absolute;
+            width: 6px;
+            height: 6px;
+            background-color: red;
+            border-radius: 50%;
+        }
+
+        .uncertainty {
+            position: absolute;
+            border: 2px dashed rgba(0, 0, 0, 0.5);
+            border-radius: 50%;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="playground" class="playground"></div>
+    <button id="addEmoji">Add Emoji</button>
+    
+    <label for="model">Select Model:</label>
+    <select id="model">
+        <option value="constant">Constant Velocity</option>
+        <option value="accelerate">Constant Acceleration</option>
+    </select>
+    
+    <button id="startAnimation">Start Animation</button>
+    
+    <script>
+        const playground = document.getElementById('playground');
+        const addEmojiButton = document.getElementById('addEmoji');
+        const startAnimationButton = document.getElementById('startAnimation');
+        const modelSelect = document.getElementById('model');
+
+        let emojis = [];
+        let animationInterval;
+
+        // Kalman Filter Class
+        class KalmanFilter {
+            constructor() {
+                this.x = 0; // Estimated position
+                this.v = 0; // Estimated velocity
+                this.P = 1; // Initial uncertainty
+                this.Q = 0.1; // Process noise covariance
+                this.R = 5; // Measurement noise covariance
+                this.K = 0; // Kalman gain
+            }
+
+            update(measurement) {
+                // Prediction update
+                this.x += this.v; // Predict position
+                this.P += this.Q; // Increase uncertainty
+
+                // Measurement update
+                this.K = this.P / (this.P + this.R);
+                this.x += this.K * (measurement - this.x);
+                this.P *= (1 - this.K);
+                return this.x;
+            }
+
+            predict() {
+                this.x += this.v;
+                return this.x;
+            }
+        }
+
+        addEmojiButton.addEventListener('click', () => {
+            const emoji = Math.random() < 0.5 ? '🐱' : '🐭'; // Randomly select cat or mouse
+            const emojiDiv = document.createElement('div');
+            emojiDiv.className = 'emoji';
+            emojiDiv.innerText = emoji;
+            emojiDiv.style.left = Math.random() * (playground.clientWidth - 50) + 'px';
+            emojiDiv.style.top = Math.random() * (playground.clientHeight - 50) + 'px';
+            playground.appendChild(emojiDiv);
+            
+            emojis.push({
+                element: emojiDiv,
+                velocity: Math.random() * 2 + 1, // Random velocity
+                direction: Math.random() * 2 * Math.PI, // Random direction in radians
+                acceleration: modelSelect.value === 'accelerate' ? (Math.random() - 0.5) : 0,
+                kalman: new KalmanFilter(),
+                measurements: [],
+                uncertaintyCircle: null,
+            });
+        });
+
+        startAnimationButton.addEventListener('click', () => {
+            if (animationInterval) clearInterval(animationInterval);
+            
+            animationInterval = setInterval(() => {
+                emojis.forEach(emoji => {
+                    const dx = emoji.velocity * Math.cos(emoji.direction);
+                    const dy = emoji.velocity * Math.sin(emoji.direction);
+
+                    // Update position
+                    const rect = emoji.element.getBoundingClientRect();
+                    let newX = rect.left + dx;
+                    let newY = rect.top + dy;
+
+                    // Handle boundaries
+                    if (newX < 0 || newX > playground.clientWidth - 50) {
+                        emoji.direction = Math.PI - emoji.direction; // Reverse direction on X collision
+                    }
+                    if (newY < 0 || newY > playground.clientHeight - 50) {
+                        emoji.direction = -emoji.direction; // Reverse direction on Y collision
+                    }
+
+                    // Update velocity if accelerating
+                    if (emoji.acceleration) {
+                        emoji.velocity += emoji.acceleration;
+                        emoji.velocity = Math.max(0.1, emoji.velocity); // Prevent negative velocity
+                    }
+
+                    // Move emoji
+                    emoji.element.style.left = (emoji.element.offsetLeft + dx) + 'px';
+                    emoji.element.style.top = (emoji.element.offsetTop + dy) + 'px';
+
+                    // Measurement simulation (random noise around current position)
+                    const measurementX = emoji.element.offsetLeft + 25 + (Math.random() - 0.5) * 10; // Center point
+                    const measurementY = emoji.element.offsetTop + 25 + (Math.random() - 0.5) * 10;
+
+                    // Update Kalman filter and store measurement
+                    const estimatedX = emoji.kalman.update(measurementX);
+                    const estimatedY = emoji.kalman.update(measurementY);
+                    emoji.measurements.push({x: measurementX, y: measurementY});
+
+                    // Keep only last 10 measurements
+                    if (emoji.measurements.length > 10) {
+                        emoji.measurements.shift();
+                    }
+
+                    // Draw measurements
+                    emoji.measurements.forEach((m) => {
+                        const measurementDiv = document.createElement('div');
+                        measurementDiv.className = 'measurement';
+                        measurementDiv.style.left = m.x + 'px';
+                        measurementDiv.style.top = m.y + 'px';
+                        playground.appendChild(measurementDiv);
+                    });
+
+                    // Draw uncertainty circle
+                    if (emoji.uncertaintyCircle) {
+                        playground.removeChild(emoji.uncertaintyCircle);
+                    }
+                    emoji.uncertaintyCircle = document.createElement('div');
+                    emoji.uncertaintyCircle.className = 'uncertainty';
+                    const uncertaintyRadius = Math.sqrt(emoji.kalman.P) * 2; // Scale for visibility
+                    emoji.uncertaintyCircle.style.width = uncertaintyRadius * 2 + 'px';
+                    emoji.uncertaintyCircle.style.height = uncertaintyRadius * 2 + 'px';
+                    emoji.uncertaintyCircle.style.left = (estimatedX - uncertaintyRadius) + 'px';
+                    emoji.uncertaintyCircle.style.top = (estimatedY - uncertaintyRadius) + 'px';
+                    playground.appendChild(emoji.uncertaintyCircle);
+                });
+            }, 500);
+        });
+    </script>
+</body>
+</html>
